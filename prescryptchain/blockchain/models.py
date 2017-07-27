@@ -181,8 +181,8 @@ class Prescription(models.Model):
     location_lat = models.FloatField(null=True, blank=True, default=0) # For coordinates
     location_lon = models.FloatField(null=True, blank=True, default=0)
     # Rx Specific
-    details = models.TextField(blank=True, max_length=10000, default="")
-    extras = models.TextField(blank=True, max_length=10000, default="")
+    details = models.TextField(blank=True, default="")
+    extras = models.TextField(blank=True, default="")
     bought = models.BooleanField(default=False)
     # Main
     signature = models.CharField(max_length=255, blank=True, default="")
@@ -220,9 +220,16 @@ class Prescription(models.Model):
             self.medic_hospital +
             self.patient_name +
             self.patient_age +
-            self.diagnosis
+            self.diagnosis +
+            self.location
         )
         self.raw_msg = msg.encode('utf-8')
+
+    def get_dynamic_hash(self):
+        # Get hash dinamically
+        # add code here
+        new_hash = self.signature + self.raw_msg
+        return new_hash
 
 
     def get_formatted_date(self, format_time='d/m/Y'):
