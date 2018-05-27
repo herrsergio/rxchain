@@ -38,6 +38,9 @@ from api.exceptions import EmptyMedication, FailedVerifiedSignature
 BLOCK_SIZE = settings.BLOCK_SIZE
 logger = logging.getLogger('django_info')
 
+# =====================================================================
+# =============================BLOCKS==================================
+# =====================================================================
 
 class BlockManager(models.Manager):
     ''' Model Manager for Blocks '''
@@ -103,7 +106,7 @@ class Block(models.Model):
     @cached_property
     def raw_size(self):
         # get the size of the raw html
-        size = (len(self.get_before_hash)+len(self.hash_block)+ len(self.get_formatted_date())) * 8
+        size = (len(self.get_previous_hash)+len(self.hash_block)+ len(self.get_formatted_date())) * 8
         return size
 
     def get_block_data(self, rx_queryset):
@@ -132,28 +135,31 @@ class Block(models.Model):
         return DateFormat(localised_date).format(format_time)
 
     @cached_property
-    def get_before_hash(self):
+    def get_previous_hash(self):
         ''' Get before hash block '''
         return self.previous_hash
 
     def __str__(self):
         return self.hash_block
 
+# =====================================================================
+# =============================TRANSACTION=============================
+# =====================================================================
 
-class PrescriptionQueryset(models.QuerySet):
+class TransactionQueryset(models.QuerySet):
     ''' Add custom querysets'''
 
     def non_validated_rxs(self):
         return self.filter(is_valid=True).filter(block=None)
 
 
-class PrescriptionManager(models.Manager):
+class TransactionManager(models.Manager):
     ''' Manager for prescriptions '''
 
     def get_queryset(self):
         return PrescriptionQueryset(self.model, using=self._db)
 
-    def non_validated_rxs(self):
+    def non_validated_txs(self):
         return self.get_queryset().non_validated_rxs()
 
     def create_block_attempt(self):
@@ -179,19 +185,20 @@ class PrescriptionManager(models.Manager):
             safe_set_cache('counter', counter)
 
 
-    def create_rx(self, data, **kwargs):
+    def create_tx(self, data, **kwargs):
 
         rx = self.create_raw_rx(data)
 
-        if "medications" in data and len(data["medications"]) != 0:
-            for med in data["medications"]:
-                Medication.objects.create_medication(prescription=rx, **med)
+        # Is this necessary
+        # if "medications" in data and len(data["medications"]) != 0:
+        #     for med in data["medications"]:
+        #         Medication.objects.create_medication(prescription=rx, **med)
 
-        return rx
+        return tx
 
-    def create_raw_rx(self, data, **kwargs):
+    def create_raw_tx(self, data, **kwargs):
         # This calls the super method saving all clean data first
-        rx = Prescription()
+        tx = Transaction()
         # Get Public Key from API
         raw_pub_key = data.get("public_key")
         pub_key = un_savify_key(raw_pub_key) # Make it usable
@@ -199,79 +206,152 @@ class PrescriptionManager(models.Manager):
         # Extract signature
         _signature = data.pop("signature", None)
 
-        rx.medic_name = bin2hex(encrypt_with_public_key(data["medic_name"].encode("utf-8"), pub_key))
-        rx.medic_cedula = bin2hex(encrypt_with_public_key(data["medic_cedula"].encode("utf-8"), pub_key))
-        rx.medic_hospital = bin2hex(encrypt_with_public_key(data["medic_hospital"].encode("utf-8"), pub_key))
-        rx.patient_name = bin2hex(encrypt_with_public_key(data["patient_name"].encode("utf-8"), pub_key))
-        rx.patient_age = bin2hex(encrypt_with_public_key(str(data["patient_age"]).encode("utf-8"), pub_key))
-        # Temporary fix overflow problems
-        # TODO fix problem with rsa encrypts with too long characters
-        if len(data['diagnosis']) > 52:
-            data['diagnosis'] = data['diagnosis'][0:50]
-        rx.diagnosis = bin2hex(encrypt_with_public_key(data["diagnosis"].encode("utf-8"), pub_key))
-
+        tx.sender = bin2hex(encrypt_with_public_key(data["medic_name"].encode("utf-8"), pub_key))
+        tx.receiver = bin2hex(encrypt_with_public_key(data["medic_cedula"].encode("utf-8"), pub_key))
+        
         # This is basically the address
-        rx.public_key = raw_pub_key
+        tx.public_key = raw_pub_key
 
-        if "location" in data:
-            rx.location = data["location"]
+        tx.timestamp = data["timestamp"]
+        tx.create_raw_msg()
 
-        rx.timestamp = data["timestamp"]
-        rx.create_raw_msg()
-
-        rx.hash()
+        tx.hash()
         # Save signature
-        rx.signature = _signature
+        tx.signature = _signature
 
+        # Transactional validation
         if verify_signature(json.dumps(sorted(data)), _signature, pub_key):
-            rx.is_valid = True
+            tx.is_valid = True
         else:
-            rx.is_valid = False
+            tx.is_valid = False
 
         # Save previous hash
         if self.last() is None:
-            rx.previous_hash = "0"
+            tx.previous_hash = "0"
         else:
-            rx.previous_hash = self.last().rxid
+            tx.previous_hash = self.last().rxid
 
-        rx.save()
+        tx.save()
 
         self.create_block_attempt()
 
-        return rx
+        return tx
 
+# Simplified Tx Model
+@python_2_unicode_compatible
+class Transaction(models.Model):
+    # Cryptographically enabled fields
+    # Necessary infomation
+    timestamp = models.DateTimeField(default=timezone.now, db_index=True)
+    raw_msg = models.TextField(blank=True, default="") # Anything can be stored here
+    # block information
+    block = models.ForeignKey('blockchain.Block', related_name='block', null=True, blank=True)
+    signature = models.CharField(max_length=255, null=True, blank=True, default="")
+    is_valid = models.BooleanField(default=True, blank=True)
+    txid = models.CharField(max_length=255, blank=True, default="")
+    previous_hash = models.CharField(max_length=255, default="")
+    # Details
+    details = JSONField(default={}, blank=True) 
+
+    objects = TransactionManager()
+
+    # Hashes msg_html with utf-8 encoding, saves this in and hash in _signature
+    def hash(self):
+        hash_object = hashlib.sha256(self.raw_msg)
+        self.txid = hash_object.hexdigest()
+
+
+    @property
+    def get_pub_key_receiver(self):
+        ''' Get public key of receiver on Pem string '''
+        _public_key = un_savify_key(self.public_key_receiver)
+        return _public_key.save_pkcs1(format="PEM")
+
+    def create_raw_msg(self):
+        # Create raw html and encode
+        msg = (
+            self.timestamp +
+            self.signature +
+        )
+        self.raw_msg = msg.encode('utf-8')
+
+    def get_formatted_date(self, format_time='d/m/Y'):
+        # Correct date and format
+        localised_date = self.timestamp
+        if not settings.DEBUG:
+            # Remember to change the time each time change
+            localised_date = localised_date - timedelta(hours=6)
+
+        return DateFormat(localised_date).format(format_time)
+
+    @cached_property
+    def get_delta_datetime(self):
+        ''' Fix 6 hours timedelta on tx '''
+        return self.timestamp - timedelta(hours=6)
+
+    # THIS NEEDS TO be update to account for Prescriptions
+    @cached_property
+    def raw_size(self):
+        # get the size of the raw tx
+        size = (
+            len(self.signature)+
+            len(str(self.get_formatted_date()))
+        )
+        return size * 8
+
+    @cached_property
+    def get_previous_hash(self):
+        ''' Get before hash transaction '''
+        return self.previous_hash
+
+
+    def __str__(self):
+        return self.txid
+
+
+
+# =====================================================================
+# =============================PRESCRIPTION============================
+# =====================================================================
 
 # Simplified Rx Model
 @python_2_unicode_compatible
 class Prescription(models.Model):
+    # MAIN
+    transaction = models.ManyToManyField('blockchain.Transaction', related_name='transaction', null=True, blank=True)
+    readable = models.BooleanField(default=False, blank=True) # Filter against this when
     # Cryptographically enabled fields
     public_key = models.CharField(max_length=3000, blank=True, default="")
-    private_key = models.CharField(max_length=3000, blank=True, default="") # Aquí puedes guardar el PrivateKey para desencriptar
-    ### Patient and Medic data (encrypted)
+    ### Encrypted data payload
+    ## Patient and Medic data (encrypted data payload)
+    # Note to self, I think that this could be a JSON field with a non fixed structure
     medic_name = models.CharField(blank=True, max_length=255, default="")
     medic_cedula = models.CharField(blank=True, max_length=255, default="")
     medic_hospital = models.CharField(blank=True, max_length=255, default="")
     patient_name = models.CharField(blank=True, max_length=255, default="")
     patient_age = models.CharField(blank=True, max_length=255, default="")
     diagnosis = models.TextField(default="")
-    ### Public fields (not encrypted)
+    encrypted_data = JSONField(default={}, blank=True)
+    ## Non encrypted data payload
+    ## Public fields (non encrypted data payload)
     # Misc
     timestamp = models.DateTimeField(default=timezone.now, db_index=True)
     location = models.CharField(blank=True, max_length=255, default="")
     raw_msg = models.TextField(blank=True, default="") # Anything can be stored here
     location_lat = models.FloatField(null=True, blank=True, default=0) # For coordinates
     location_lon = models.FloatField(null=True, blank=True, default=0)
+    public_data = JSONField(default={}, blank=True)
     # Rx Specific
     details = models.TextField(blank=True, max_length=10000, default="")
     extras = models.TextField(blank=True, max_length=10000, default="")
     bought = models.BooleanField(default=False)
-    # Main
-    block = models.ForeignKey('blockchain.Block', related_name='block', null=True, blank=True)
+    # Transactional validation
     signature = models.CharField(max_length=255, null=True, blank=True, default="")
     is_valid = models.BooleanField(default=True, blank=True)
     rxid = models.CharField(max_length=255, blank=True, default="")
-    previous_hash = models.CharField(max_length=255, default="")
+    previous_hash = models.CharField(max_length=255, default="") # this should not exist
 
+    # Business logic
     objects = PrescriptionManager()
 
     # Hashes msg_html with utf-8 encoding, saves this in and hash in _signature
@@ -290,12 +370,6 @@ class Prescription(models.Model):
             "patient_age" : base64.b64encode(hex2bin(self.patient_age)),
             "diagnosis" : base64.b64encode(hex2bin(self.diagnosis))
         }
-
-    @property
-    def get_priv_key(self):
-        ''' Get private key on Pem string '''
-        _key = un_savify_key(self.private_key)
-        return _key.save_pkcs1(format="PEM")
 
     @property
     def get_pub_key(self):
@@ -345,7 +419,7 @@ class Prescription(models.Model):
         return size * 8
 
     @cached_property
-    def get_before_hash(self):
+    def get_previous_hash(self):
         ''' Get before hash prescription '''
         return self.previous_hash
 
