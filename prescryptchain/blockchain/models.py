@@ -149,7 +149,7 @@ class Block(models.Model):
 class TransactionQueryset(models.QuerySet):
     ''' Add custom querysets'''
 
-    def non_validated_rxs(self):
+    def non_validated_txs(self):
         return self.filter(is_valid=True).filter(block=None)
 
 
@@ -157,10 +157,10 @@ class TransactionManager(models.Manager):
     ''' Manager for prescriptions '''
 
     def get_queryset(self):
-        return PrescriptionQueryset(self.model, using=self._db)
+        return TransactionQueryset(self.model, using=self._db)
 
     def non_validated_txs(self):
-        return self.get_queryset().non_validated_rxs()
+        return self.get_queryset().non_validated_txs()
 
     def create_block_attempt(self):
         ''' Use PoW hashcash algoritm to attempt to create a block '''
@@ -173,7 +173,7 @@ class TransactionManager(models.Manager):
         is_valid_hashcash, hashcash_string = _hashcash_tools.calculate_sha(cache.get('challenge'), cache.get('counter'))
 
         if is_valid_hashcash:
-            block = Block.objects.create_block(self.non_validated_rxs()) # TODO add on creation hash and merkle
+            block = Block.objects.create_block(self.non_validated_txs()) # TODO add on creation hash and merkle
             block.hashcash = hashcash_string
             block.nonce = cache.get('counter')
             block.save()
@@ -271,7 +271,7 @@ class Transaction(models.Model):
         # Create raw html and encode
         msg = (
             self.timestamp +
-            self.signature +
+            self.signature
         )
         self.raw_msg = msg.encode('utf-8')
 
@@ -313,6 +313,17 @@ class Transaction(models.Model):
 # =====================================================================
 # =============================PRESCRIPTION============================
 # =====================================================================
+class PrescriptionQueryset(models.QuerySet):
+    ''' Add custom querysets '''
+    def non_validated_rxs(self):
+        return self.filter(is_valid=True).filter(block=None)
+
+class PrescriptionManager(models.Manager):
+    ''' Manager for prescriptions '''
+
+    def get_queryset(self):
+        return PrescriptionQueryset(self.model, using=self._db)
+
 
 # Simplified Rx Model
 @python_2_unicode_compatible
