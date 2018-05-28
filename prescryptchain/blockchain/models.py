@@ -329,7 +329,7 @@ class PrescriptionManager(models.Manager):
 @python_2_unicode_compatible
 class Prescription(models.Model):
     # MAIN
-    transaction = models.ManyToManyField('blockchain.Transaction', related_name='transaction', null=True, blank=True)
+    transaction = models.ForeignKey('blockchain.Transaction', related_name='transaction', null=True, blank=True)
     readable = models.BooleanField(default=False, blank=True) # Filter against this when
     # Cryptographically enabled fields
     public_key = models.CharField(max_length=3000, blank=True, default="")
