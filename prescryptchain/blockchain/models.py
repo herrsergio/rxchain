@@ -162,7 +162,7 @@ class TransactionManager(models.Manager):
     def non_validated_txs(self):
         return self.get_queryset().non_validated_txs()
 
-    def create_block_attempt(self):
+    def create_block_attempt(self): # This is where PoW happens
         ''' Use PoW hashcash algoritm to attempt to create a block '''
         _hashcash_tools = Hashcash(debug=True)
         if not cache.get('challenge') and not cache.get('counter') == 0:
@@ -187,7 +187,7 @@ class TransactionManager(models.Manager):
 
     def create_tx(self, data, **kwargs):
 
-        rx = self.create_raw_rx(data)
+        tx = self.create_raw_tx(data)
 
         # Is this necessary
         # if "medications" in data and len(data["medications"]) != 0:
