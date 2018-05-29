@@ -38,6 +38,7 @@ class PrescriptionSerializer(serializers.ModelSerializer):
     timestamp = serializers.DateTimeField(read_only=False)
 
     class Meta:
+        #model = Prescription
         model = Prescription
         fields = (
             'id',
@@ -56,13 +57,17 @@ class PrescriptionSerializer(serializers.ModelSerializer):
             'raw_size',
             'rxid',
             'is_valid',
-            'block',
+            'transaction',
+            #'block',
         )
-        read_only_fields = ('id', 'rxid', 'previous_hash', 'is_valid', 'block')
+        read_only_fields = ('id', 'rxid', 'previous_hash', 'is_valid', 'transaction')
+        #read_only_fields = ('id', 'rxid', 'previous_hash', 'is_valid', 'block')
 
     def create(self, validated_data):
-        rx = Prescription.objects.create_rx(data=validated_data)
-        return rx
+        #rx = Prescription.objects.create_rx(data=validated_data)
+        tx = Prescription.objects.create_tx(data=validated_data)
+        #return rx Transaction
+        return tx
 
 
 class PrescriptionViewSet(viewsets.ModelViewSet):
